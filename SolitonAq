@@ -1,0 +1,112 @@
+clear all, close all, clc
+
+%%%%%%%%%%%%%% Open DAQ %%%%
+daq.getDevices, s = daq.createSession('ni')
+addAnalogOutputChannel(s,'Dev1',0,'Voltage'); addAnalogOutputChannel(s,'Dev1',1,'Voltage');
+addDigitalChannel(s,'Dev1','Port0/Line0', 'OutputOnly'); addDigitalChannel(s,'Dev1','Port0/Line2', 'OutputOnly');
+%%%%%%%%%%%%%%% Open CCD %%%%
+asm = System.AppDomain.CurrentDomain.GetAssemblies;
+if ~any(arrayfun(@(n) strncmpi(char(asm.Get(n-1).FullName),'uc480dotnet', length('uc480dotnet')), 1:asm.Length))
+    NET.addAssembly('C:\Program Files\Thorlabs\Scientific Imaging\DCx Camera Support\Develop\Dotnet\signed\uc480DotNet.dll'); end
+cam = uc480.Camera;
+if ~strcmp(char(cam.Init), 'SUCCESS')
+    error('Could not initialize camera'); end
+if ~strcmp(char(cam.Display.Mode.Set(uc480.Defines.DisplayMode.DiB)), 'SUCCESS')
+    error('Could not set display mode'); end
+if ~strcmp(char(cam.PixelFormat.Set(uc480.Defines.ColorMode.SensorRaw8)), 'SUCCESS')
+    error('Could not set pixel format'); end
+if ~strcmp(char(cam.Trigger.Set(uc480.Defines.TriggerMode.Software)), 'SUCCESS')
+    error('Could not set trigger format'); end
+[ErrChk, img.ID] = cam.Memory.Allocate(true);
+if ~strcmp(char(ErrChk), 'SUCCESS')
+    error('Could not allocate memory'); end
+[ErrChk, img.Width, img.Height, img.Bits, img.Pitch] = cam.Memory.Inquire(img.ID);
+if ~strcmp(char(ErrChk), 'SUCCESS')
+    error('Could not get image information'); end
+%%%%%%%%%%%%%%% Settings CCD
+if ~strcmp(char(cam.Timing.PixelClock.Set(24)), 'SUCCESS') % 24 default
+    error('Could not set exposure time'); end
+if ~strcmp(char(cam.Timing.Framerate.Set(10)), 'SUCCESS')  % 10 default
+    error('Could not set exposure time'); end
+if ~strcmp(char(cam.Timing.Exposure.Set(30)), 'SUCCESS')   % 20 default
+    error('Could not set exposure time'); end
+
+%%
+% FWHMxIn=19 px
+% FWHMyIn=20 px
+% 500V 22°C 4 uW
+%
+%
+%outputSingleScan(s,[470/139.25 0 0 0]); pause(0.2); %500V
+%outputSingleScan(s,[375/139.25 0 0 0]); pause(0.2); %400V
+outputSingleScan(s,[282/139.25 0 0 0]); pause(0.2); %300V
+%outputSingleScan(s,[328/139.25 0 0 0]); pause(0.2); %350V
+%outputSingleScan(s,[423/139.25 0 0 0]); pause(0.2); %450V
+nImages=1010;
+esposition=[1 2 3];
+
+time=0; tic  % ogni acquisizione impiega circa 0.3 sec.
+massimi=zeros(length(esposition),nImages);
+FWHMx=zeros(length(esposition),nImages); 
+FWHMy=zeros(length(esposition),nImages);
+path='C:\Users\Lab_Develop\Desktop\solitoni\';
+
+for jj= 1:nImages
+
+for ii=1:length(esposition)
+    
+     if ~strcmp(char(cam.Timing.Exposure.Set(esposition(ii))), 'SUCCESS') error('Could not set exposure time'); end
+     if ~strcmp(char(cam.Acquisition.Freeze(true)), 'SUCCESS') error('Could not acquire image'); end
+     [ErrChk, tmp] = cam.Memory.CopyToArray(img.ID); 
+     if ~strcmp(char(ErrChk), 'SUCCESS') error('Could not obtain image data'); end
+     immDATA=reshape(uint8(tmp), [img.Width, img.Height, img.Bits/8]);
+     save([path '\esp' num2str(esposition(ii)) '\Solitone_' num2str(jj) '.mat'], 'immDATA')
+     imagesc(rot90(immDATA,3)), axis equal, colorbar;
+     
+     fondo=mean(mean(immDATA(1:20,1:20)));
+     [num,idx]=max(immDATA(:));
+     massimi(ii,jj)=num;
+     [posX, posY]=ind2sub(size(immDATA),idx);
+     vall=((num-fondo)/2)+fondo;
+     profilo=immDATA(posX,:);
+     iii=1;
+     while profilo(iii)<vall,
+         iii=iii+1; end
+     bas=iii;
+     iii=posY;
+     while profilo(iii)>vall,
+         iii=iii+1; end
+     alt=iii;
+     FWHMy(ii,jj)=(alt-bas);
+     profilo=immDATA(:,posY);
+     iii=1;
+     while profilo(iii)<vall,
+         iii=iii+1; end
+     bas=iii;
+     iii=posX;
+     while profilo(iii)>vall,
+         iii=iii+1; end
+     alt=iii;
+     FWHMx(ii,jj)=(alt-bas);
+     
+     pause(0.1);
+end
+
+fprintf([num2str(jj) '/' num2str(nImages) '\n'])
+time=[time toc]; pause(2)
+end
+
+save([path 'time.mat'], 'time')
+save([path 'massimi.mat'], 'massimi')
+save([path 'FWHMx.mat'], 'FWHMx')
+save([path 'FWHMy.mat'], 'FWHMy')
+
+
+%%
+
+%%%%%%%%%%%%%%% Close CCD %%%%
+if ~strcmp(char(cam.Exit), 'SUCCESS')
+    error('Could not close camera');
+end
+ 
+outputSingleScan(s,[0 0 0 0]);
